@@ -32,7 +32,7 @@ To run this microservice using our pre-built Docker multi-arch images to open
 a Video4Linux-supported camera, simply start it as follows:
 
 ```
-docker run --rm -ti --init --net=host --device /dev/input/js0 chalmersrevere/opendlv-device-ps3controller-multi:v0.0.3 --device=/dev/input/js0 --freq=100 --acc_min=0 --acc_max=50 --dec_min=0 --dec_max=-10 --steering_min=-10 --steering_max=10 --cid=111 --verbose
+docker run --rm -ti --init --net=host --device /dev/input/js0 chalmersrevere/opendlv-device-ps3controller-multi:v0.0.4 --device=/dev/input/js0 --freq=100 --acc_min=0 --acc_max=50 --dec_min=0 --dec_max=-10 --steering_min=-10 --steering_max=10 --cid=111 --verbose
 ```
 
 ## Build from sources on the example of Ubuntu 16.04 LTS

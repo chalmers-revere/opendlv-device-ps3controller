@@ -43,7 +43,7 @@ int32_t main(int32_t argc, char **argv) {
          (0 == commandlineArguments.count("steering_min")) ||
          (0 == commandlineArguments.count("steering_max")) ) {
         std::cerr << argv[0] << " interfaces with the given PS3 controller to emit ActuationRequest messages to an OD4Session." << std::endl;
-        std::cerr << "Usage:   " << argv[0] << " --device=<PS3 controller device> --freq=<frequency in Hz>--acc_min=<minimum acceleration> --acc_max=<maximum acceleration> --dec_min=<minimum deceleration> --dec_max=<maximum deceleration> --steering_min=<minimum steering> --steering_max=<maximum steering> --cid=<OpenDaVINCI session> [--verbose]" << std::endl;
+        std::cerr << "Usage:   " << argv[0] << " --device=<PS3 controller device> --freq=<frequency in Hz>--acc_min=<minimum acceleration> --acc_max=<maximum acceleration> --dec_min=<minimum deceleration> --dec_max=<maximum deceleration> --steering_min=<minimum steering> --steering_max=<maximum steering> --cid=<OpenDaVINCI session> [--ps4] [--verbose]" << std::endl;
         std::cerr << "Example: " << argv[0] << " --device=/dev/input/js0 --freq=100 --acc_min=0 --acc_max=50 --dec_min=0 --dec_max=-10 --steering_min=-10 --steering_max=10 --cid=111" << std::endl;
         retCode = 1;
     }
@@ -52,6 +52,7 @@ int32_t main(int32_t argc, char **argv) {
         const uint32_t MAX_AXES_VALUE = 32767;
 
         const bool VERBOSE{commandlineArguments.count("verbose") != 0};
+        const bool IS_PS4{commandlineArguments.count("ps4") != 0};
         const std::string DEVICE{commandlineArguments["device"]};
 
         const float FREQ = std::stof(commandlineArguments["freq"]);
@@ -89,7 +90,8 @@ int32_t main(int32_t argc, char **argv) {
 
             cluon::OD4Session od4Sender{static_cast<uint16_t>(std::stoi(commandlineArguments["cid"]))};
             cluon::OD4Session od4{static_cast<uint16_t>(std::stoi(commandlineArguments["cid"]))};
-            od4.timeTrigger(FREQ, [&MIN_AXES_VALUE,
+            od4.timeTrigger(FREQ, [&IS_PS4,
+                                   &MIN_AXES_VALUE,
                                    &MAX_AXES_VALUE,
                                    VERBOSE,
                                    &ACCELERATION_MIN,
@@ -138,7 +140,7 @@ int32_t main(int32_t argc, char **argv) {
                             }
 
                             // no else-if as many of these events can occur simultaneously
-                            if (3 == js.number) { // RIGHT ANALOG STICK
+                            if (((!IS_PS4) ? (3 == js.number) : (5 == js.number))) { // RIGHT ANALOG STICK
                                 // this will return a percent value over the whole range
                                 percent = static_cast<float>(js.value-MIN_AXES_VALUE)/static_cast<float>(MAX_AXES_VALUE-MIN_AXES_VALUE)*100.0f;
                                 // this will return values in the range [0-100] for both accelerating and braking (instead of [50-0] for accelerating and [50-100] for braking)
