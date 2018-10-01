@@ -86,9 +86,9 @@ int32_t main(int32_t argc, char **argv) {
             // Use non blocking reading.
             fcntl(ps3controllerDevice, F_SETFL, O_NONBLOCK);
 
+            float acceleration{0};
+            float steering{0};
             opendlv::proxy::ActuationRequest ar;
-
-            cluon::OD4Session od4Sender{static_cast<uint16_t>(std::stoi(commandlineArguments["cid"]))};
             cluon::OD4Session od4{static_cast<uint16_t>(std::stoi(commandlineArguments["cid"]))};
             if (od4.isRunning()) {
                 od4.timeTrigger(FREQ, [&IS_PS4,
@@ -101,12 +101,12 @@ int32_t main(int32_t argc, char **argv) {
                                        &DECELERATION_MAX,
                                        &STEERING_MIN,
                                        &STEERING_MAX,
+                                       &acceleration,
+                                       &steering,
                                        &ar,
                                        &ps3controllerDevice,
                                        &axes,
-                                       &od4Sender](){
-                    float acceleration{0};
-                    float steering{0};
+                                       &od4](){
                     struct js_event js;
                     while (::read(ps3controllerDevice, &js, sizeof(struct js_event)) > 0) {
                         float percent{0};
@@ -166,11 +166,11 @@ int32_t main(int32_t argc, char **argv) {
                                         acceleration = 0;
                                     }
                                 }
-                            break;
+                                break;
                             case JS_EVENT_BUTTON:
-                            break;
+                                break;
                             case JS_EVENT_INIT:
-                            break;
+                                break;
                             default:
                                 break;
                             }
@@ -185,19 +185,19 @@ int32_t main(int32_t argc, char **argv) {
                                  []() {});
                         std::cout << buffer.str() << std::endl;
                     }
-                    od4Sender.send(ar);
+                    od4.send(ar);
 
                     // Continue.
                     return true;
                 });
+
+                // Send stop.
+                ar.acceleration(0).steering(0).isValid(true);
+                od4.send(ar);
             }
 
             ::close(ps3controllerDevice);
             ::free(axes);
-
-            // Send stop.
-            ar.acceleration(0).steering(0).isValid(true);
-            od4.send(ar);
 
             retCode = 0;
         }
