@@ -69,7 +69,7 @@ int32_t main(int32_t argc, char **argv) {
         else {
             int num_of_axes{0};
             int num_of_buttons{0};
-            int name_of_ps3controller[80];
+            char name_of_ps3controller[80];
             int *axes = static_cast<int*>(::calloc(num_of_axes, sizeof(int)));
 
 #pragma GCC diagnostic push
@@ -77,9 +77,10 @@ int32_t main(int32_t argc, char **argv) {
             ::ioctl(ps3controllerDevice, JSIOCGAXES, &num_of_axes);
             ::ioctl(ps3controllerDevice, JSIOCGBUTTONS, &num_of_buttons);
 #pragma GCC diagnostic pop
-            ::ioctl(ps3controllerDevice, JSIOCGNAME(80), &name_of_ps3controller);
-
-            std::clog << "[opendlv-device-ps3controller]: Found " << name_of_ps3controller << ", number of axes: " << num_of_axes << ", number of buttons: " << num_of_buttons << std::endl;
+            if (::ioctl(ps3controllerDevice, JSIOCGNAME(80), &name_of_ps3controller)) {
+                ::strncpy(name_of_ps3controller, "Unknown", sizeof(name_of_ps3controller));
+            }
+            std::clog << "[opendlv-device-ps3controller]: Found " << std::string(name_of_ps3controller) << ", number of axes: " << num_of_axes << ", number of buttons: " << num_of_buttons << std::endl;
 
             // Use non blocking reading.
             fcntl(ps3controllerDevice, F_SETFL, O_NONBLOCK);
@@ -101,10 +102,10 @@ int32_t main(int32_t argc, char **argv) {
                                    &ps3controllerDevice,
                                    &axes,
                                    &od4Sender](){
+                float acceleration{0};
+                float steering{0};
                 struct js_event js;
                 while (::read(ps3controllerDevice, &js, sizeof(struct js_event)) > 0) {
-                    float acceleration{0};
-                    float steering{0};
                     float percent{0};
                     switch (js.type & ~JS_EVENT_INIT) {
                         case JS_EVENT_AXIS:
@@ -171,23 +172,23 @@ int32_t main(int32_t argc, char **argv) {
                             break;
                         }
                     }
-
-                    // EAGAIN is returned when the queue is empty
-                    if (errno != EAGAIN) {
-                        std::cerr << "[opendlv-device-ps3controller]: Error while reading: " << errno << ": " << strerror(errno) << std::endl;
-                        return false;
-                    }
-
-                    ar.acceleration(acceleration).steering(steering).isValid(true);
-                    if (VERBOSE) {
-                        std::stringstream buffer;
-                        ar.accept([](uint32_t, const std::string &, const std::string &) {},
-                                 [&buffer](uint32_t, std::string &&, std::string &&n, auto v) { buffer << n << " = " << v << '\n'; },
-                                 []() {});
-                        std::cout << buffer.str() << std::endl;
-                    }
-                    od4Sender.send(ar);
                 }
+
+                // EAGAIN is returned when the queue is empty
+                if (errno != EAGAIN) {
+                    std::cerr << "[opendlv-device-ps3controller]: Error while reading: " << errno << ": " << strerror(errno) << std::endl;
+                    return false;
+                }
+
+                ar.acceleration(acceleration).steering(steering).isValid(true);
+                if (VERBOSE) {
+                    std::stringstream buffer;
+                    ar.accept([](uint32_t, const std::string &, const std::string &) {},
+                             [&buffer](uint32_t, std::string &&, std::string &&n, auto v) { buffer << n << " = " << v << '\n'; },
+                             []() {});
+                    std::cout << buffer.str() << std::endl;
+                }
+                od4Sender.send(ar);
 
                 // Continue.
                 return true;
