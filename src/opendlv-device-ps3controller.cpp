@@ -71,14 +71,13 @@ int32_t main(int32_t argc, char **argv) {
             int num_of_axes{0};
             int num_of_buttons{0};
             char name_of_ps3controller[80];
-            int *axes = static_cast<int*>(::calloc(num_of_axes, sizeof(int)));
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Woverflow"
             ::ioctl(ps3controllerDevice, JSIOCGAXES, &num_of_axes);
             ::ioctl(ps3controllerDevice, JSIOCGBUTTONS, &num_of_buttons);
 #pragma GCC diagnostic pop
-            if (::ioctl(ps3controllerDevice, JSIOCGNAME(80), &name_of_ps3controller)) {
+            if (::ioctl(ps3controllerDevice, JSIOCGNAME(80), &name_of_ps3controller) < 0) {
                 ::strncpy(name_of_ps3controller, "Unknown", sizeof(name_of_ps3controller));
             }
             std::clog << "[opendlv-device-ps3controller]: Found " << std::string(name_of_ps3controller) << ", number of axes: " << num_of_axes << ", number of buttons: " << num_of_buttons << std::endl;
@@ -105,14 +104,13 @@ int32_t main(int32_t argc, char **argv) {
                                        &steering,
                                        &ar,
                                        &ps3controllerDevice,
-                                       &axes,
                                        &od4](){
                     struct js_event js;
                     while (::read(ps3controllerDevice, &js, sizeof(struct js_event)) > 0) {
                         float percent{0};
                         switch (js.type & ~JS_EVENT_INIT) {
                             case JS_EVENT_AXIS:
-                                axes[js.number] = js.value;
+                            {
                                 if (0 == js.number) { // LEFT ANALOG STICK
                                     // this will return a percent value over the whole range
                                     percent = static_cast<float>(js.value - MIN_AXES_VALUE)/static_cast<float>(MAX_AXES_VALUE-MIN_AXES_VALUE)*100.0f;
@@ -122,7 +120,6 @@ int32_t main(int32_t argc, char **argv) {
                                             std::cout << "[opendlv-device-ps3controller]: Going straight." << std::endl;
                                         }
                                         else {
-                                        {
                                             // this will return values in the range [0-100] for both a left or right turn (instead of [0-50] for left and [50-100] for right)
                                             std::cout << "[opendlv-device-ps3controller]: Turning "<< (js.value<0?"left":"right") << " at " << (js.value<0?(100.0f-2.0f*percent):(2.0f*percent-100.0f)) <<"%." << std::endl;
                                         }
@@ -139,9 +136,8 @@ int32_t main(int32_t argc, char **argv) {
                                         steering = 0;
                                     }
                                 }
-
                                 // no else-if as many of these events can occur simultaneously
-                                if (((!IS_PS4) ? (3 == js.number) : (5 == js.number))) { // RIGHT ANALOG STICK
+                                if (((!IS_PS4) ? (4 == js.number) : (5 == js.number))) { // RIGHT ANALOG STICK
                                     // this will return a percent value over the whole range
                                     percent = static_cast<float>(js.value-MIN_AXES_VALUE)/static_cast<float>(MAX_AXES_VALUE-MIN_AXES_VALUE)*100.0f;
                                     // this will return values in the range [0-100] for both accelerating and braking (instead of [50-0] for accelerating and [50-100] for braking)
@@ -167,14 +163,18 @@ int32_t main(int32_t argc, char **argv) {
                                     }
                                 }
                                 break;
+                            }
                             case JS_EVENT_BUTTON:
                                 break;
                             case JS_EVENT_INIT:
                                 break;
                             default:
                                 break;
-                            }
                         }
+                    }
+                    if (errno != EAGAIN) {
+                        std::cerr << "[opendlv-device-ps3controller]: Error: " << errno << ": " << strerror(errno) << std::endl;
+                        return false;
                     }
 
                     ar.acceleration(acceleration).steering(steering).isValid(true);
@@ -195,10 +195,7 @@ int32_t main(int32_t argc, char **argv) {
                 ar.acceleration(0).steering(0).isValid(true);
                 od4.send(ar);
             }
-
             ::close(ps3controllerDevice);
-            ::free(axes);
-
             retCode = 0;
         }
     }
