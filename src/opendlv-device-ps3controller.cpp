@@ -21,6 +21,8 @@
 #include <linux/joystick.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -28,7 +30,9 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <mutex>
 #include <string>
+#include <thread>
 
 int32_t main(int32_t argc, char **argv) {
     int32_t retCode{0};
@@ -85,99 +89,132 @@ int32_t main(int32_t argc, char **argv) {
             // Use non blocking reading.
             fcntl(ps3controllerDevice, F_SETFL, O_NONBLOCK);
 
+            std::mutex valuesMutex;
             float acceleration{0};
             float steering{0};
+            bool hasError{false};
+
+            // Thread to read values.
+            std::thread ps3controllerReadingThread([&IS_PS4,
+                                                    &MIN_AXES_VALUE,
+                                                    &MAX_AXES_VALUE,
+                                                    VERBOSE,
+                                                    &ACCELERATION_MIN,
+                                                    &ACCELERATION_MAX,
+                                                    &DECELERATION_MIN,
+                                                    &DECELERATION_MAX,
+                                                    &STEERING_MIN,
+                                                    &STEERING_MAX,
+                                                    &valuesMutex,
+                                                    &acceleration,
+                                                    &steering,
+                                                    &hasError,
+                                                    &ps3controllerDevice]() {
+                struct timeval timeout {};
+                fd_set setOfFiledescriptorsToReadFrom{};
+
+                while (!hasError) {
+                    // Define timeout for select system call. The timeval struct must be
+                    // reinitialized for every select call as it might be modified containing
+                    // the actual time slept.
+                    timeout.tv_sec  = 0;
+                    timeout.tv_usec = 20 * 1000; // Check for new data with 50Hz.
+
+                    FD_ZERO(&setOfFiledescriptorsToReadFrom);
+                    FD_SET(ps3controllerDevice, &setOfFiledescriptorsToReadFrom);
+                    ::select(ps3controllerDevice + 1, &setOfFiledescriptorsToReadFrom, nullptr, nullptr, &timeout);
+
+                    if (FD_ISSET(ps3controllerDevice, &setOfFiledescriptorsToReadFrom)) {
+                        std::lock_guard<std::mutex> lck(valuesMutex);
+
+                        struct js_event js;
+                        while (::read(ps3controllerDevice, &js, sizeof(struct js_event)) > 0) {
+                            float percent{0};
+                            switch (js.type & ~JS_EVENT_INIT) {
+                                case JS_EVENT_AXIS:
+                                {
+                                    if (0 == js.number) { // LEFT ANALOG STICK
+                                        // this will return a percent value over the whole range
+                                        percent = static_cast<float>(js.value - MIN_AXES_VALUE)/static_cast<float>(MAX_AXES_VALUE-MIN_AXES_VALUE)*100.0f;
+
+                                        if (VERBOSE) {
+                                            if (percent > 49.95f && percent < 50.05f) {
+                                                std::cout << "[opendlv-device-ps3controller]: Going straight." << std::endl;
+                                            }
+                                            else {
+                                                // this will return values in the range [0-100] for both a left or right turn (instead of [0-50] for left and [50-100] for right)
+                                                std::cout << "[opendlv-device-ps3controller]: Turning "<< (js.value<0?"left":"right") << " at " << (js.value<0?(100.0f-2.0f*percent):(2.0f*percent-100.0f)) <<"%." << std::endl;
+                                            }
+                                        }
+
+                                        // map the steering from percentage to its range
+                                        steering = percent/100.0f*(STEERING_MAX-STEERING_MIN)+STEERING_MIN;
+                                        steering *= -1.0f;
+                                        // modify in steps of 0.25
+                                        steering = ::roundf(4.0f*steering)/4.0f;
+                                        
+                                        // Clamp value to avoid showing "-0" (just "0" looks better imo)
+                                        if (steering < 0.001f && steering >-0.001f) {
+                                            steering = 0;
+                                        }
+                                    }
+                                    // no else-if as many of these events can occur simultaneously
+                                    if (((!IS_PS4) ? (4 == js.number) : (5 == js.number))) { // RIGHT ANALOG STICK
+                                        // this will return a percent value over the whole range
+                                        percent = static_cast<float>(js.value-MIN_AXES_VALUE)/static_cast<float>(MAX_AXES_VALUE-MIN_AXES_VALUE)*100.0f;
+                                        // this will return values in the range [0-100] for both accelerating and braking (instead of [50-0] for accelerating and [50-100] for braking)
+                                        if (VERBOSE) {
+                                            std::cout << "[opendlv-device-ps3controller]: " << (js.value<0?"Accelerating":"Braking") <<" at "<< (js.value<0?(100.0f-2.0f*percent):(2.0f*percent-100.0f)) << "%." << std::endl;
+                                        }
+
+                                        if (js.value < 0) {
+                                            // map the acceleration from percentage to its range
+                                            acceleration=(100.0f-2.0f*percent)/100.0f*(ACCELERATION_MAX-ACCELERATION_MIN)+ACCELERATION_MIN;
+                                        }
+                                        else {
+                                            // map the acceleration from percentage to its range
+                                            acceleration = (2.0f*percent-100.0f)/100.0f*(DECELERATION_MAX-DECELERATION_MIN);
+                                        }
+
+                                        // modify in steps of 0.25
+                                        acceleration = ::roundf(4.0f*acceleration)/4.0f;
+
+                                        // Clamp value to avoid showing "-0" (just "0" looks better imo)
+                                        if (acceleration < 0.001f && acceleration >-0.001f) {
+                                            acceleration = 0;
+                                        }
+                                    }
+                                    break;
+                                }
+                                case JS_EVENT_BUTTON:
+                                    break;
+                                case JS_EVENT_INIT:
+                                    break;
+                                default:
+                                    break;
+                            }
+                        }
+                        if (errno != EAGAIN) {
+                            std::cerr << "[opendlv-device-ps3controller]: Error: " << errno << ": " << strerror(errno) << std::endl;
+                            hasError = true;
+                        }
+                    }
+                }
+            });
+
+            // OD4Session to send values to.
             opendlv::proxy::ActuationRequest ar;
             cluon::OD4Session od4{static_cast<uint16_t>(std::stoi(commandlineArguments["cid"]))};
             if (od4.isRunning()) {
-                od4.timeTrigger(FREQ, [&IS_PS4,
-                                       &MIN_AXES_VALUE,
-                                       &MAX_AXES_VALUE,
-                                       VERBOSE,
-                                       &ACCELERATION_MIN,
-                                       &ACCELERATION_MAX,
-                                       &DECELERATION_MIN,
-                                       &DECELERATION_MAX,
-                                       &STEERING_MIN,
-                                       &STEERING_MAX,
+                od4.timeTrigger(FREQ, [&VERBOSE,
+                                       &valuesMutex,
                                        &acceleration,
                                        &steering,
+                                       &hasError,
                                        &ar,
-                                       &ps3controllerDevice,
                                        &od4](){
-                    struct js_event js;
-                    while (::read(ps3controllerDevice, &js, sizeof(struct js_event)) > 0) {
-                        float percent{0};
-                        switch (js.type & ~JS_EVENT_INIT) {
-                            case JS_EVENT_AXIS:
-                            {
-                                if (0 == js.number) { // LEFT ANALOG STICK
-                                    // this will return a percent value over the whole range
-                                    percent = static_cast<float>(js.value - MIN_AXES_VALUE)/static_cast<float>(MAX_AXES_VALUE-MIN_AXES_VALUE)*100.0f;
-
-                                    if (VERBOSE) {
-                                        if (percent > 49.95f && percent < 50.05f) {
-                                            std::cout << "[opendlv-device-ps3controller]: Going straight." << std::endl;
-                                        }
-                                        else {
-                                            // this will return values in the range [0-100] for both a left or right turn (instead of [0-50] for left and [50-100] for right)
-                                            std::cout << "[opendlv-device-ps3controller]: Turning "<< (js.value<0?"left":"right") << " at " << (js.value<0?(100.0f-2.0f*percent):(2.0f*percent-100.0f)) <<"%." << std::endl;
-                                        }
-                                    }
-
-                                    // map the steering from percentage to its range
-                                    steering = percent/100.0f*(STEERING_MAX-STEERING_MIN)+STEERING_MIN;
-                                    steering *= -1.0f;
-                                    // modify in steps of 0.25
-                                    steering = ::roundf(4.0f*steering)/4.0f;
-                                    
-                                    // Clamp value to avoid showing "-0" (just "0" looks better imo)
-                                    if (steering < 0.001f && steering >-0.001f) {
-                                        steering = 0;
-                                    }
-                                }
-                                // no else-if as many of these events can occur simultaneously
-                                if (((!IS_PS4) ? (4 == js.number) : (5 == js.number))) { // RIGHT ANALOG STICK
-                                    // this will return a percent value over the whole range
-                                    percent = static_cast<float>(js.value-MIN_AXES_VALUE)/static_cast<float>(MAX_AXES_VALUE-MIN_AXES_VALUE)*100.0f;
-                                    // this will return values in the range [0-100] for both accelerating and braking (instead of [50-0] for accelerating and [50-100] for braking)
-                                    if (VERBOSE) {
-                                        std::cout << "[opendlv-device-ps3controller]: " << (js.value<0?"Accelerating":"Braking") <<" at "<< (js.value<0?(100.0f-2.0f*percent):(2.0f*percent-100.0f)) << "%." << std::endl;
-                                    }
-
-                                    if (js.value < 0) {
-                                        // map the acceleration from percentage to its range
-                                        acceleration=(100.0f-2.0f*percent)/100.0f*(ACCELERATION_MAX-ACCELERATION_MIN)+ACCELERATION_MIN;
-                                    }
-                                    else {
-                                        // map the acceleration from percentage to its range
-                                        acceleration = (2.0f*percent-100.0f)/100.0f*(DECELERATION_MAX-DECELERATION_MIN);
-                                    }
-
-                                    // modify in steps of 0.25
-                                    acceleration = ::roundf(4.0f*acceleration)/4.0f;
-
-                                    // Clamp value to avoid showing "-0" (just "0" looks better imo)
-                                    if (acceleration < 0.001f && acceleration >-0.001f) {
-                                        acceleration = 0;
-                                    }
-                                }
-                                break;
-                            }
-                            case JS_EVENT_BUTTON:
-                                break;
-                            case JS_EVENT_INIT:
-                                break;
-                            default:
-                                break;
-                        }
-                    }
-                    if (errno != EAGAIN) {
-                        std::cerr << "[opendlv-device-ps3controller]: Error: " << errno << ": " << strerror(errno) << std::endl;
-                        return false;
-                    }
-
-                    ar.acceleration(acceleration).steering(steering).isValid(true);
+                    std::lock_guard<std::mutex> lck(valuesMutex);
+                    ar.acceleration(acceleration).steering(steering).isValid(!hasError);
                     if (VERBOSE) {
                         std::stringstream buffer;
                         ar.accept([](uint32_t, const std::string &, const std::string &) {},
@@ -187,8 +224,8 @@ int32_t main(int32_t argc, char **argv) {
                     }
                     od4.send(ar);
 
-                    // Continue.
-                    return true;
+                    // Determine whether to continue or not.
+                    return !hasError;
                 });
 
                 // Send stop.
