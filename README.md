@@ -1,3 +1,5 @@
+Moved to https://git.opendlv.org.
+
 ## OpenDLV Microservice to interface with a PS3 controller
 
 This repository provides source code to interface with a PS3 controller to
